@@ -2,8 +2,10 @@ package com.spookyrobotics.automatedsaytheirnames
 
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.speech.tts.TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID
 import android.speech.tts.UtteranceProgressListener
 import android.widget.ImageView
+import android.widget.TextView
 import android.widget.ViewFlipper
 import androidx.appcompat.app.AppCompatActivity
 import androidx.room.Room
@@ -18,14 +20,22 @@ import kotlinx.coroutines.launch
 import java.util.*
 import kotlin.coroutines.CoroutineContext
 
-
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
+    private val SILENCE_ID: String = "silenceId"
+    private val ENDING_UTTERANCE_ID: String = "ending"
     private val utteranceProgressListener: UtteranceProgressListener = buildProgressListener()
 
     private fun buildProgressListener(): UtteranceProgressListener {
         return object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String) {
+                mainScope.launch {
+                    val currentVictim = victims.indexOfFirst { it.utteranceId == utteranceId }
+                    if (currentVictim != -1) {
+                        val nextVictim = victims.getOrNull(currentVictim+1)?.utteranceId ?: ""
+                        nextRemembered.text = nextVictim.removePrefix(ParseResources.UTTERANCE_ID_PREFIX)
+                    }
+                }
             }
 
             override fun onDone(utteranceId: String) {
@@ -48,24 +58,37 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var parseResources: ParseResources
     private val victims: MutableList<PoliceVictimEntry> = mutableListOf()
     private var startDisposable: Disposable? = null
-    private lateinit var textToSpeech: TextToSpeech
+    private var textToSpeech: TextToSpeech? = null
     private lateinit var mainScope: CoroutineScope
     private lateinit var ioScope: CoroutineScope
     private lateinit var database: OfflineContentDao
     private lateinit var playPauseButton: ViewFlipper
+    private lateinit var justRemembered: TextView
+    private lateinit var nextRemembered: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        justRemembered = findViewById(R.id.justRemembered)
+        nextRemembered = findViewById(R.id.nextRemembered)
         setupPlayPauseButton()
         database = provideDatabase()
         mainScope = provideMainCoroutineScope()
         ioScope = provideIoCoroutineScope()
-        textToSpeech = TextToSpeech(this, this)
-        textToSpeech.setOnUtteranceProgressListener(utteranceProgressListener)
+        textToSpeech = TextToSpeech(this, this).apply {
+            setOnUtteranceProgressListener(utteranceProgressListener)
+        }
         parseResources = ParseResources(this, database, ioScope)
         parseResources.main()
-
+        startDisposable = parseResources.onProcessingComplete().subscribe {
+            if (it == true) {
+                mainScope.launch {
+                    setVictims(database.getAll())
+                    setNextVictimToFirstInList()
+                    processingComplete = true
+                }
+            }
+        }
     }
 
     private fun setupPlayPauseButton() {
@@ -91,29 +114,29 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun stopPlayback() {
         if (isPlaying) {
             mainScope.launch {
-                textToSpeech.playSilentUtterance(3000, TextToSpeech.QUEUE_FLUSH, "ending")
+                setNextVictimToFirstInList()
+                textToSpeech?.playSilentUtterance(3000, TextToSpeech.QUEUE_FLUSH, ENDING_UTTERANCE_ID)
                 playPauseButton.displayedChild = PLAY_VIEW_INDEX
                 isPlaying = false
             }
         }
     }
 
-    override fun onStart() {
-        super.onStart()
-        startDisposable = parseResources.onProcessingComplete().subscribe {
-            if (it == true) {
-                mainScope.launch {
-                    setVictims(database.getAll())
-                    processingComplete = true
-                }
-            }
+    @Synchronized
+    private fun noteRemembered(utteranceId: String) {
+        if (utteranceId == SILENCE_ID || utteranceId == ENDING_UTTERANCE_ID) {
+            return
+        }
+        mainScope.launch {
+            justRemembered.text = utteranceId.removePrefix(ParseResources.UTTERANCE_ID_PREFIX)
+            val rememberedVictimIndex = victims.indexOfFirst { it.utteranceId == utteranceId }
+            victims.removeAt(rememberedVictimIndex)
         }
     }
 
-    @Synchronized
-    private fun noteRemembered(utteranceId: String) {
-        val rememberedVictimIndex = victims.indexOfFirst { it.utteranceId == utteranceId }
-        victims.removeAt(rememberedVictimIndex)
+    private fun setNextVictimToFirstInList() {
+        val nextVictimId = victims.firstOrNull()?.utteranceId?.removePrefix(ParseResources.UTTERANCE_ID_PREFIX)
+        nextRemembered.text = nextVictimId ?: ""
     }
 
     private fun startPlaybackIfPossible() {
@@ -135,8 +158,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun speakTheirName(victim: PoliceVictimEntry) {
-        textToSpeech.speak(victim.name, TextToSpeech.QUEUE_ADD, null)
-        textToSpeech.playSilentUtterance(3000, TextToSpeech.QUEUE_ADD, victim.utteranceId)
+        val paramsMap = hashMapOf<String,String>(
+            Pair(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, victim.utteranceId)
+        )
+        textToSpeech?.speak(victim.name, TextToSpeech.QUEUE_ADD, paramsMap)
+        textToSpeech?.playSilentUtterance(3000, TextToSpeech.QUEUE_ADD, SILENCE_ID)
     }
 
     fun provideDatabase(): OfflineContentDao {
@@ -166,7 +192,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
 
-            val result = textToSpeech . setLanguage(Locale.US);
+            val result = textToSpeech?. setLanguage(Locale.US) ?: run {
+                println("Text to speech is null. Failing to set language and start playback")
+                return
+            }
 
             if (result == TextToSpeech.LANG_MISSING_DATA
                 || result == TextToSpeech.LANG_NOT_SUPPORTED
@@ -174,7 +203,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 println("Failed to set locale to us")
             } else {
                 textToSpeechInit = true
-                startPlaybackIfPossible()
             }
 
         } else {
@@ -183,11 +211,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
-// Don't forget to shutdown tts!
-        if (textToSpeech != null) {
-            textToSpeech.stop();
-            textToSpeech.shutdown();
-        }
+        textToSpeech?.stop();
+        textToSpeech?.shutdown();
         super.onDestroy();
     }
 }

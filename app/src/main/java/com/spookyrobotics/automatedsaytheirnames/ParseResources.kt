@@ -20,6 +20,9 @@ class ParseResources(
     private val database: OfflineContentDao,
     private val ioScope: CoroutineScope
 ) {
+    companion object {
+        val UTTERANCE_ID_PREFIX: String = "id:"
+    }
     private var nextIndex = 0
     private val nextEntry = mutableListOf<String>()
     private val entries = mutableListOf<String>()
@@ -75,7 +78,7 @@ class ParseResources(
             val location = nextEntry[1]
             val details = nextEntry[2]
             entries.add(name)
-            val victim = PoliceVictims(name, birthTime, deathTime, location, details, "id:$name")
+            val victim = PoliceVictims(name, birthTime, deathTime, location, details, "$UTTERANCE_ID_PREFIX$name")
             nextIndex += 1
             ioScope.launch {
                 val entry = PoliceVictimEntry (
