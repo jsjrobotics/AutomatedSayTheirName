@@ -75,15 +75,16 @@ class ParseResources(
             val location = nextEntry[1]
             val details = nextEntry[2]
             entries.add(name)
-            val victim = PoliceVictims(name, birthTime, deathTime, location, details)
+            val victim = PoliceVictims(name, birthTime, deathTime, location, details, "id:$name")
             nextIndex += 1
             ioScope.launch {
-                val entry = PoliceVictimEntry(
+                val entry = PoliceVictimEntry (
                     birthDate = victim.birthDate,
                     deathDate = victim.deathDate,
                     name = victim.name,
                     details = victim.details,
-                    location = victim.location
+                    location = victim.location,
+                    utteranceId = victim.utteranceId
                 )
 
                 database.insertEntry(entry)

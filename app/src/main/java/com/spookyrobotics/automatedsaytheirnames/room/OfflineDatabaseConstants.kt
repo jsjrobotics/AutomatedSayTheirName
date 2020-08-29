@@ -6,6 +6,8 @@ object OfflineDatabaseConstants {
     object ManifestTableConstants {
         const val NAME = "police_victim_entries"
         const val COLUMN_NAME = "name"
+        const val COLUMN_UTTERANCE_ID = "utterance_id"
+
         const val COLUMN_BIRTHDATE = "birthdate"
         const val COLUMN_DEATHDATE = "deathdate"
 

@@ -2,6 +2,9 @@ package com.spookyrobotics.automatedsaytheirnames
 
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import android.widget.ImageView
+import android.widget.ViewFlipper
 import androidx.appcompat.app.AppCompatActivity
 import androidx.room.Room
 import com.spookyrobotics.automatedsaytheirnames.room.DatabaseWrapper
@@ -18,6 +21,27 @@ import kotlin.coroutines.CoroutineContext
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
+    private val utteranceProgressListener: UtteranceProgressListener = buildProgressListener()
+
+    private fun buildProgressListener(): UtteranceProgressListener {
+        return object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String) {
+            }
+
+            override fun onDone(utteranceId: String) {
+                noteRemembered(utteranceId)
+            }
+
+            override fun onError(utteranceId: String) {
+                println("Error speaking: $utteranceId")
+            }
+
+        }
+    }
+
+    private val PAUSE_VIEW_INDEX: Int = 1
+    private val PLAY_VIEW_INDEX: Int = 0
+
     private var isPlaying: Boolean = false
     private var processingComplete: Boolean = false
     private var textToSpeechInit: Boolean = false
@@ -28,34 +52,75 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var mainScope: CoroutineScope
     private lateinit var ioScope: CoroutineScope
     private lateinit var database: OfflineContentDao
+    private lateinit var playPauseButton: ViewFlipper
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        setupPlayPauseButton()
         database = provideDatabase()
         mainScope = provideMainCoroutineScope()
         ioScope = provideIoCoroutineScope()
         textToSpeech = TextToSpeech(this, this)
+        textToSpeech.setOnUtteranceProgressListener(utteranceProgressListener)
         parseResources = ParseResources(this, database, ioScope)
         parseResources.main()
 
+    }
+
+    private fun setupPlayPauseButton() {
+        playPauseButton = findViewById(R.id.playPauseButton)
+        val playView = ImageView(this).apply {
+            setImageResource(R.drawable.ic_baseline_play_circle_outline_24)
+        }
+        val pauseView = ImageView(this).apply {
+            setImageResource(R.drawable.ic_baseline_stop_24)
+        }
+        playPauseButton.addView(playView, PLAY_VIEW_INDEX)
+        playPauseButton.addView(pauseView, PAUSE_VIEW_INDEX)
+        playPauseButton.displayedChild = PLAY_VIEW_INDEX
+        playPauseButton.setOnClickListener {
+            if (playPauseButton.displayedChild == PLAY_VIEW_INDEX) {
+                startPlaybackIfPossible()
+            } else {
+                stopPlayback()
+            }
+        }
+    }
+
+    private fun stopPlayback() {
+        if (isPlaying) {
+            mainScope.launch {
+                textToSpeech.playSilentUtterance(3000, TextToSpeech.QUEUE_FLUSH, "ending")
+                playPauseButton.displayedChild = PLAY_VIEW_INDEX
+                isPlaying = false
+            }
+        }
     }
 
     override fun onStart() {
         super.onStart()
         startDisposable = parseResources.onProcessingComplete().subscribe {
             if (it == true) {
-                processingComplete = true
-                startPlaybackIfPossible()
+                mainScope.launch {
+                    setVictims(database.getAll())
+                    processingComplete = true
+                }
             }
         }
     }
 
+    @Synchronized
+    private fun noteRemembered(utteranceId: String) {
+        val rememberedVictimIndex = victims.indexOfFirst { it.utteranceId == utteranceId }
+        victims.removeAt(rememberedVictimIndex)
+    }
+
     private fun startPlaybackIfPossible() {
         if (processingComplete && textToSpeechInit && !isPlaying) {
-            isPlaying = true
-            victims.clear()
-            ioScope.launch {
-                victims.addAll(database.getAll())
+            mainScope.launch {
+                isPlaying = true
+                playPauseButton.displayedChild = PAUSE_VIEW_INDEX
                 victims.forEach {
                     speakTheirName(it)
                 }
@@ -63,9 +128,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
+    @Synchronized
+    private fun setVictims(victimList: List<PoliceVictimEntry>) {
+        victims.clear()
+        victims.addAll(victimList)
+    }
+
     private fun speakTheirName(victim: PoliceVictimEntry) {
         textToSpeech.speak(victim.name, TextToSpeech.QUEUE_ADD, null)
-        textToSpeech.playSilentUtterance(3000, TextToSpeech.QUEUE_ADD, victim.toString())
+        textToSpeech.playSilentUtterance(3000, TextToSpeech.QUEUE_ADD, victim.utteranceId)
     }
 
     fun provideDatabase(): OfflineContentDao {
@@ -103,11 +174,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 println("Failed to set locale to us")
             } else {
                 textToSpeechInit = true
-                for (tmpVoice in textToSpeech.voices) {
-                    if (tmpVoice.name == "_voiceName") {
-                        textToSpeech.voice = tmpVoice
-                    }
-                }
                 startPlaybackIfPossible()
             }
 
