@@ -78,16 +78,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         textToSpeech = TextToSpeech(this, this).apply {
             setOnUtteranceProgressListener(utteranceProgressListener)
         }
-        parseResources = ParseResources(this, database, ioScope)
-        parseResources.main()
+        parseResources = ParseResources(this, database)
         startDisposable = parseResources.onProcessingComplete().subscribe {
             if (it == true) {
                 mainScope.launch {
                     setVictims(database.getAll())
                     setNextVictimToFirstInList()
+                    println("Processed ${victims.size}")
                     processingComplete = true
                 }
             }
+        }
+        ioScope.launch {
+            parseResources.main()
         }
     }
 
@@ -122,7 +125,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    @Synchronized
     private fun noteRemembered(utteranceId: String) {
         if (utteranceId == SILENCE_ID || utteranceId == ENDING_UTTERANCE_ID) {
             return
@@ -130,9 +132,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         mainScope.launch {
             justRemembered.text = utteranceId.removePrefix(ParseResources.UTTERANCE_ID_PREFIX)
             val rememberedVictimIndex = victims.indexOfFirst { it.utteranceId == utteranceId }
-            victims.removeAt(rememberedVictimIndex)
+            removeFromList(rememberedVictimIndex)
         }
     }
+
+
 
     private fun setNextVictimToFirstInList() {
         val nextVictimId = victims.firstOrNull()?.utteranceId?.removePrefix(ParseResources.UTTERANCE_ID_PREFIX)
@@ -149,6 +153,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
             }
         }
+    }
+
+    @Synchronized
+    private fun removeFromList(rememberedVictimIndex: Int) {
+        victims.removeAt(rememberedVictimIndex)
     }
 
     @Synchronized
